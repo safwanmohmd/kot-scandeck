@@ -2,7 +2,7 @@
   // ---------------------------------------------------------------------------
   // 0. Auto-Update Engine Config
   // ---------------------------------------------------------------------------
-  const CURRENT_VERSION = "3.0";
+  const CURRENT_VERSION = "3.1";
   // Replace this URL with your raw GitHub or web server link pointing to version.json
   const VERSION_CHECK_URL = "https://raw.githubusercontent.com/safwanmohmd/kot-scandeck-version/refs/heads/main/version.json";
 

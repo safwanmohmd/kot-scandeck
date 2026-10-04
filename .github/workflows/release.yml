@@ -1,0 +1,39 @@
+name: Release Extension & Update Version JSON
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. Zip Extension Files
+      - name: Create Extension Zip
+        run: |
+          zip -r KOT-ScanDeck.zip . -x "*.git*" "*.github*" "test.html"
+
+      # 2. Extract Version from manifest.json & Generate version.json
+      - name: Generate version.json
+        id: create-json
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          DOWNLOAD_URL="${{ github.event.release.assets_url }}"
+          
+          # Construct download link for release asset
+          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/KOT-ScanDeck.zip"
+          
+          echo "{\"latestVersion\": \"$VERSION\", \"downloadUrl\": \"$ZIP_URL\"}" > version.json
+
+      # 3. Upload Zip and version.json to GitHub Release Assets
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            KOT-ScanDeck.zip
+            version.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

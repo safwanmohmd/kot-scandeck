@@ -1,5 +1,5 @@
 // =============================================================================
-// KOT-ScanDeck: Standalone Auto-Runsheet Engine (v6.0 - Scheduled Creation Support)
+// KOT-ScanDeck: Standalone Auto-Runsheet Engine (v6.1 - Start & End Time Schedule)
 // =============================================================================
 
 window.KOT_RunsheetModule = (function () {
@@ -14,7 +14,8 @@ window.KOT_RunsheetModule = (function () {
   let rsActionType = localStorage.getItem('rs_action_type') || 'DRAFT';
   let rsStepDelay = parseInt(localStorage.getItem('rs_step_delay') || '500', 10);
   let rsScheduleEnabled = localStorage.getItem('rs_schedule_enabled') === 'true';
-  let rsScheduleTime = localStorage.getItem('rs_schedule_time') || '';
+  let rsScheduleStartTime = localStorage.getItem('rs_schedule_start_time') || '';
+  let rsScheduleEndTime = localStorage.getItem('rs_schedule_end_time') || '';
   let rsScheduleTimer = null;
 
   const tabStyles = `
@@ -44,7 +45,8 @@ window.KOT_RunsheetModule = (function () {
     #rs-vehicle-select, 
     #rs-action-select, 
     #rs-delay-input,
-    #rs-schedule-time-input {
+    #rs-schedule-start-input,
+    #rs-schedule-end-input {
       background-color: #ffffff !important;
       color: #0f172a !important;
       border: 1px solid #c4b5fd !important;
@@ -61,7 +63,8 @@ window.KOT_RunsheetModule = (function () {
     #rs-vehicle-select:focus,
     #rs-action-select:focus,
     #rs-delay-input:focus,
-    #rs-schedule-time-input:focus {
+    #rs-schedule-start-input:focus,
+    #rs-schedule-end-input:focus {
       border-color: #6366f1 !important;
       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
       background-color: #ffffff !important;
@@ -166,15 +169,27 @@ window.KOT_RunsheetModule = (function () {
           <div class="rs-schedule-header">
             <label for="rs-schedule-toggle">
               <input type="checkbox" id="rs-schedule-toggle" ${rsScheduleEnabled ? 'checked' : ''} style="cursor:pointer;" />
-              <span>⏰ Auto-Schedule Runsheet</span>
+              <span>⏰ Auto-Schedule Window</span>
             </label>
             <span id="rs-schedule-badge" style="font-size:7.5px; font-weight:700; color:${rsScheduleEnabled ? '#4338ca' : '#94a3b8'};">
               ${rsScheduleEnabled ? 'ACTIVE' : 'OFF'}
             </span>
           </div>
-          <div id="rs-schedule-config" style="display:${rsScheduleEnabled ? 'flex' : 'none'}; align-items:center; gap:5px;">
-            <input type="time" id="rs-schedule-time-input" class="rs-select" value="${rsScheduleTime}" style="padding:2px 4px; font-size:9px;" />
-            <span id="rs-schedule-countdown" style="font-size:8px; font-weight:700; color:#6366f1; white-space:nowrap;">--:--</span>
+          <div id="rs-schedule-config" style="display:${rsScheduleEnabled ? 'flex' : 'none'}; flex-direction:column; gap:4px;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+              <div>
+                <label style="font-size:7.5px; color:#6366f1;">Start Time:</label>
+                <input type="time" id="rs-schedule-start-input" class="rs-select" value="${rsScheduleStartTime}" style="padding:2px 4px; font-size:8.5px;" />
+              </div>
+              <div>
+                <label style="font-size:7.5px; color:#6366f1;">End Time (Stop):</label>
+                <input type="time" id="rs-schedule-end-input" class="rs-select" value="${rsScheduleEndTime}" style="padding:2px 4px; font-size:8.5px;" />
+              </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:7.5px; font-weight:600; color:#64748b;">Starts in:</span>
+              <span id="rs-schedule-countdown" style="font-size:8px; font-weight:700; color:#6366f1;">--:--</span>
+            </div>
           </div>
         </div>
       </div>
@@ -340,7 +355,8 @@ window.KOT_RunsheetModule = (function () {
     const rsProgressFill = shadowRoot.getElementById('rs-progress-fill');
     const rsScheduleToggle = shadowRoot.getElementById('rs-schedule-toggle');
     const rsScheduleConfig = shadowRoot.getElementById('rs-schedule-config');
-    const rsScheduleTimeInput = shadowRoot.getElementById('rs-schedule-time-input');
+    const rsScheduleStartInput = shadowRoot.getElementById('rs-schedule-start-input');
+    const rsScheduleEndInput = shadowRoot.getElementById('rs-schedule-end-input');
     const rsScheduleBadge = shadowRoot.getElementById('rs-schedule-badge');
     const rsScheduleCountdown = shadowRoot.getElementById('rs-schedule-countdown');
 
@@ -358,20 +374,33 @@ window.KOT_RunsheetModule = (function () {
     rsDelayInput.onchange = () => { rsStepDelay = parseInt(rsDelayInput.value, 10) || 500; localStorage.setItem('rs_step_delay', rsStepDelay); };
 
     // =========================================================================
-    // Schedule Engine Watcher
+    // Schedule Engine Watcher (Start & End Time Automation)
     // =========================================================================
     function checkScheduleTrigger() {
-      if (!rsScheduleEnabled || !rsScheduleTime) {
+      const now = new Date();
+
+      // Check End Time cutoff while running
+      if (isRsRunning && rsScheduleEndTime) {
+        const [endH, endM] = rsScheduleEndTime.split(':').map(n => parseInt(n, 10));
+        if (!isNaN(endH) && !isNaN(endM)) {
+          if (now.getHours() === endH && now.getMinutes() === endM) {
+            shouldRsStop = true;
+            rsStatusLabel.textContent = '⏹ Scheduled End Time Reached! Stopping...';
+            return;
+          }
+        }
+      }
+
+      if (!rsScheduleEnabled || !rsScheduleStartTime) {
         if (rsScheduleCountdown) rsScheduleCountdown.textContent = '--:--';
         return;
       }
 
-      const now = new Date();
-      const [schedH, schedM] = rsScheduleTime.split(':').map(n => parseInt(n, 10));
-      if (isNaN(schedH) || isNaN(schedM)) return;
+      const [startH, startM] = rsScheduleStartTime.split(':').map(n => parseInt(n, 10));
+      if (isNaN(startH) || isNaN(startM)) return;
 
       const targetDate = new Date();
-      targetDate.setHours(schedH, schedM, 0, 0);
+      targetDate.setHours(startH, startM, 0, 0);
 
       let diffMs = targetDate.getTime() - now.getTime();
       if (diffMs < -1000) {
@@ -379,15 +408,15 @@ window.KOT_RunsheetModule = (function () {
         diffMs = targetDate.getTime() - now.getTime();
       }
 
+      // Trigger Auto-Start
       if (diffMs <= 1000 && diffMs >= -2000) {
         if (!isRsRunning) {
           rsScheduleEnabled = false;
           rsScheduleToggle.checked = false;
-          rsScheduleConfig.style.display = 'none';
-          rsScheduleBadge.textContent = 'TRIGGERED';
+          rsScheduleBadge.textContent = 'RUNNING';
           rsScheduleBadge.style.color = '#059669';
           localStorage.setItem('rs_schedule_enabled', 'false');
-          rsStatusLabel.textContent = '⏰ Schedule Reached! Auto-Starting...';
+          rsStatusLabel.textContent = '⏰ Scheduled Start Time Reached! Auto-Starting...';
           rsStartBtn.click();
           return;
         }
@@ -416,9 +445,15 @@ window.KOT_RunsheetModule = (function () {
       checkScheduleTrigger();
     };
 
-    rsScheduleTimeInput.onchange = () => {
-      rsScheduleTime = rsScheduleTimeInput.value;
-      localStorage.setItem('rs_schedule_time', rsScheduleTime);
+    rsScheduleStartInput.onchange = () => {
+      rsScheduleStartTime = rsScheduleStartInput.value;
+      localStorage.setItem('rs_schedule_start_time', rsScheduleStartTime);
+      checkScheduleTrigger();
+    };
+
+    rsScheduleEndInput.onchange = () => {
+      rsScheduleEndTime = rsScheduleEndInput.value;
+      localStorage.setItem('rs_schedule_end_time', rsScheduleEndTime);
       checkScheduleTrigger();
     };
 

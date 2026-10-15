@@ -5,24 +5,27 @@
   "version": "3.0",
   "description": "Logistics scanning deck auto-injector extension with custom exclusion filters, version auto-updates, and custom audio RTO alert.",
   "permissions": [
-    "activeTab",
-    "scripting",
+    "tabs",
     "storage",
+    "scripting",
     "clipboardRead"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "<all_urls>"
   ],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js" , "runsheet.js"],
+      "js": ["content.js", "runsheet.js"],
       "run_at": "document_end"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["alarm.mp3"],
+      "resources": ["alarm.mp3", "cpd_alarm.mp3"],
       "matches": ["<all_urls>"]
     }
   ]

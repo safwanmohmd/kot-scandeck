@@ -1,52 +1,65 @@
 // =============================================================================
-// KOT-ScanDeck: Shipment Auditor Engine (High 3-Beep Noticeable Alarm)
+// KOT-ScanDeck: Globally Synchronized Shipment Auditor Engine (auditor.js)
 // =============================================================================
 
 window.KOT_AuditorModule = (function () {
+  // CONFIG: Put your Supabase project credentials here
+  const SUPABASE_CONFIG = {
+    url: 'https://YOUR_PROJECT_ID.supabase.co',
+    anonKey: 'YOUR_SUPABASE_ANON_KEY',
+    pollIntervalMs: 8000 // Automatically syncs across all devices every 8s
+  };
+
   let auditorTargetSet = new Set();
   let auditorFoundSet = new Set();
   let enableAuditorAlarm = true;
   let lastAuditorAlertTime = 0;
   let currentShadowRoot = null;
+  let syncTimer = null;
 
-  // 1. Load Permanent TIDs from chrome.storage.local
-  function loadPersistedTids() {
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['auditor_target_tids', 'auditor_alarm_enabled'], (data) => {
-        if (data.auditor_target_tids && Array.isArray(data.auditor_target_tids)) {
-          auditorTargetSet = new Set(data.auditor_target_tids);
+  // 1. Fetch Global TIDs from Cloud Database
+  async function fetchGlobalTids() {
+    if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.includes('YOUR_PROJECT_ID')) {
+      console.warn('[Auditor] Supabase URL not configured.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_targets?select=tracking_id`, {
+        headers: {
+          'apikey': SUPABASE_CONFIG.anonKey,
+          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`
         }
-        if (typeof data.auditor_alarm_enabled !== 'undefined') {
-          enableAuditorAlarm = data.auditor_alarm_enabled;
-        }
-        updateAuditorUi();
       });
-    } else {
-      const cached = localStorage.getItem('auditor_target_tids') || '';
-      auditorTargetSet = new Set(cached.split(/[\n,;\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean));
+
+      if (!response.ok) throw new Error('Failed to fetch from cloud');
+
+      const data = await response.json();
+      const newTids = new Set(data.map(item => item.tracking_id.trim().toUpperCase()));
+
+      // Update in-memory set
+      auditorTargetSet = newTids;
+
+      // Update local storage backup
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ auditor_target_tids: Array.from(auditorTargetSet) });
+      }
+
       updateAuditorUi();
+    } catch (err) {
+      console.error('[Auditor Cloud Sync Error]', err);
     }
   }
 
-  loadPersistedTids();
+  // Initial fetch and start background polling for all devices
+  fetchGlobalTids();
+  if (syncTimer) clearInterval(syncTimer);
+  syncTimer = setInterval(fetchGlobalTids, SUPABASE_CONFIG.pollIntervalMs);
 
-  // 2. Storage Event Listener (Instant update when dispatched from website)
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && changes.auditor_target_tids) {
-        auditorTargetSet = new Set(changes.auditor_target_tids.newValue || []);
-        auditorFoundSet.clear();
-        updateAuditorUi();
-        console.log(`%c[Auditor] Storage synced live: ${auditorTargetSet.size} TIDs active.`, 'color:#06b6d4;font-weight:bold;');
-      }
-    });
-  }
-
-  // 3. HIGH 3-BEEP PIERCING NOTICEABLE ALARM (2400Hz + 1600Hz Square Wave Harmonic)
+  // 2. High 3-Beep Noticeable Warning Alarm (2400Hz + 1600Hz)
   function playAuditorPiercingAlarm() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      // 3 sharp, urgent bursts: 0s, 0.16s, 0.32s
       [0, 0.16, 0.32].forEach(startOffset => {
         [2400, 1600].forEach(freq => {
           const osc = ctx.createOscillator();
@@ -71,43 +84,7 @@ window.KOT_AuditorModule = (function () {
     }
   }
 
-  // 4. Update Targets & Persist Permanently
-  function setTargetTids(list) {
-    const cleanList = (Array.isArray(list) ? list : String(list).split(/[\n,;\s]+/))
-      .map(s => String(s).trim().toUpperCase())
-      .filter(Boolean);
-
-    auditorTargetSet = new Set(cleanList);
-    auditorFoundSet.clear();
-
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.set({ auditor_target_tids: Array.from(auditorTargetSet) });
-    }
-    localStorage.setItem('auditor_target_tids', Array.from(auditorTargetSet).join('\n'));
-
-    updateAuditorUi();
-  }
-
-  // Listen for direct sync messages from background.js
-  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message && message.action === 'SYNC_AUDITOR_TIDS') {
-        setTargetTids(message.tids);
-      }
-    });
-  }
-
-  // BroadcastChannel Handshake
-  try {
-    const channel = new BroadcastChannel('KOT_AUDITOR_CHANNEL');
-    channel.onmessage = (event) => {
-      if (event.data && event.data.type === 'SYNC_AUDITOR_TIDS') {
-        setTargetTids(event.data.tids);
-      }
-    };
-  } catch (e) {}
-
-  // 5. Inspect DOM for Missing Scans
+  // 3. Inspect Live DOM Scans
   function inspectPageForAuditedTids() {
     if (!enableAuditorAlarm || auditorTargetSet.size === 0) return;
 
@@ -130,7 +107,7 @@ window.KOT_AuditorModule = (function () {
   const observer = new MutationObserver(() => inspectPageForAuditedTids());
   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
-  // 6. Mount into ScanDeck UI
+  // 4. Mount into ScanDeck UI
   function mount(shadowRoot) {
     if (!shadowRoot || shadowRoot.getElementById('tab-btn-auditor')) return;
     currentShadowRoot = shadowRoot;
@@ -151,26 +128,25 @@ window.KOT_AuditorModule = (function () {
     auditorContent.innerHTML = `
       <div style="background:#ecfeff; border:1px solid #a5f3fc; border-radius:6px; padding:6px; display:flex; flex-direction:column; gap:4px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 Missing Shipment Auditor</span>
+          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 Global Shipment Auditor</span>
           <label style="cursor:pointer; display:flex; align-items:center; gap:3px; font-size:7.5px; font-weight:700; color:#0e7490;">
             <input type="checkbox" id="auditor-alarm-chk" ${enableAuditorAlarm ? 'checked' : ''} /> ALARM
           </label>
         </div>
-        <p style="font-size:7.5px; color:#155e75; margin:0;">Urgent 3-beep alarm when target missing TIDs are scanned.</p>
+        <p style="font-size:7.5px; color:#155e75; margin:0;">Cloud-synchronized. Alerts when missing TIDs are scanned.</p>
       </div>
 
       <div>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-          <label style="font-size:8px; font-weight:700; color:#64748b;">Target Missing TIDs (Synced)</label>
+          <label style="font-size:8px; font-weight:700; color:#64748b;">Global Missing Queue (Cloud)</label>
           <span id="auditor-counter" style="font-size:8px; font-weight:700; color:#0891b2;">${auditorFoundSet.size}/${auditorTargetSet.size} Detected</span>
         </div>
-        <textarea id="auditor-input" style="height:50px; font-size:9px; width:100%; border:1px solid #cbd5e1; border-radius:5px; padding:4px; font-family:monospace;" placeholder="Waiting for TIDs from portal...">${Array.from(auditorTargetSet).join('\n')}</textarea>
+        <textarea id="auditor-input" readonly style="height:45px; font-size:9px; width:100%; border:1px solid #cbd5e1; border-radius:5px; padding:4px; font-family:monospace; background:#f8fafc;" placeholder="Loading from cloud...">${Array.from(auditorTargetSet).join('\n')}</textarea>
       </div>
 
       <div style="display:flex; gap:4px;">
-        <button id="auditor-paste-btn" class="btn btn-secondary" style="padding:4px; font-size:8px; flex:1.2; font-weight:700; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">📋 Sync from Clipboard</button>
-        <button id="auditor-test-sound" class="btn btn-secondary" style="padding:4px; font-size:8px; flex:1;">🔊 Test 3-Beep</button>
-        <button id="auditor-clear-btn" class="btn btn-secondary" style="padding:4px; font-size:8px; flex:0.8;">🗑️ Clear</button>
+        <button id="auditor-refresh-btn" class="btn btn-secondary" style="padding:4px; font-size:8px; flex:1.2; font-weight:700; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">🔄 Force Sync</button>
+        <button id="auditor-test-sound" class="btn btn-secondary" style="padding:4px; font-size:8px; flex:1;">🔊 Test Alarm</button>
       </div>
 
       <!-- ACTIVE TIDS PREVIEW LIST -->
@@ -203,9 +179,7 @@ window.KOT_AuditorModule = (function () {
       targetContent.classList.remove('hidden-tab');
     }
 
-    auditorBtn.addEventListener('click', () => {
-      switchToTab(auditorBtn, auditorContent);
-    });
+    auditorBtn.addEventListener('click', () => switchToTab(auditorBtn, auditorContent));
 
     const scannerTabBtn = shadowRoot.querySelector('#tab-btn-scanner');
     const scannerTabContent = shadowRoot.querySelector('#tab-content-scanner');
@@ -222,50 +196,28 @@ window.KOT_AuditorModule = (function () {
       });
     }
 
-    // Input handlers
-    const input = shadowRoot.getElementById('auditor-input');
     const chk = shadowRoot.getElementById('auditor-alarm-chk');
     const testBtn = shadowRoot.getElementById('auditor-test-sound');
-    const clearBtn = shadowRoot.getElementById('auditor-clear-btn');
-    const pasteBtn = shadowRoot.getElementById('auditor-paste-btn');
-
-    input.addEventListener('input', () => {
-      setTargetTids(input.value);
-    });
+    const refreshBtn = shadowRoot.getElementById('auditor-refresh-btn');
 
     chk.addEventListener('change', () => {
       enableAuditorAlarm = chk.checked;
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({ auditor_alarm_enabled: enableAuditorAlarm });
-      }
     });
 
     testBtn.addEventListener('click', () => playAuditorPiercingAlarm());
 
-    clearBtn.addEventListener('click', () => {
-      setTargetTids([]);
-    });
-
-    pasteBtn.addEventListener('click', async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          setTargetTids(text);
-          pasteBtn.textContent = '✅ Synced!';
-          setTimeout(() => { pasteBtn.textContent = '📋 Sync from Clipboard'; }, 1500);
-        }
-      } catch (err) {
-        alert('Please allow clipboard permission to sync.');
-      }
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.textContent = '⏳ Syncing...';
+      await fetchGlobalTids();
+      refreshBtn.textContent = '✅ Synced!';
+      setTimeout(() => { refreshBtn.textContent = '🔄 Force Sync'; }, 1500);
     });
 
     updateAuditorUi();
   }
 
   function renderActiveBadges() {
-    if (auditorTargetSet.size === 0) {
-      return '<span style="color:#94a3b8;">No TIDs loaded</span>';
-    }
+    if (auditorTargetSet.size === 0) return '<span style="color:#94a3b8;">No TIDs in cloud</span>';
     return Array.from(auditorTargetSet).map(tid => {
       const isFound = auditorFoundSet.has(tid);
       return `<span style="background:${isFound ? '#bbf7d0' : '#e2e8f0'}; color:${isFound ? '#15803d' : '#334155'}; padding:1px 3px; border-radius:3px; border:1px solid ${isFound ? '#86efac' : '#cbd5e1'}; font-weight:bold;">${tid}</span>`;
@@ -273,9 +225,7 @@ window.KOT_AuditorModule = (function () {
   }
 
   function renderFoundList() {
-    if (auditorFoundSet.size === 0) {
-      return '<span style="color:#94a3b8;">None detected yet</span>';
-    }
+    if (auditorFoundSet.size === 0) return '<span style="color:#94a3b8;">None detected yet</span>';
     return Array.from(auditorFoundSet).map(id => `✅ Found: ${id}`).join('<br>');
   }
 
@@ -292,9 +242,7 @@ window.KOT_AuditorModule = (function () {
     const foundList = currentShadowRoot.getElementById('auditor-found-list');
 
     if (counter) counter.textContent = `${auditorFoundSet.size}/${auditorTargetSet.size} Detected`;
-    if (input && document.activeElement !== input) {
-      input.value = Array.from(auditorTargetSet).join('\n');
-    }
+    if (input && document.activeElement !== input) input.value = Array.from(auditorTargetSet).join('\n');
     if (activeBadges) activeBadges.innerHTML = renderActiveBadges();
     if (foundList) foundList.innerHTML = renderFoundList();
   }
@@ -306,5 +254,5 @@ window.KOT_AuditorModule = (function () {
     if (e.detail && e.detail.shadowRoot) mount(e.detail.shadowRoot);
   });
 
-  return { mount, setTargetTids };
+  return { mount, fetchGlobalTids };
 })();

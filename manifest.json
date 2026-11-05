@@ -1,24 +1,19 @@
 {
   "manifest_version": 3,
   "name": "KOT-ScanDeck",
-  "version": "5.4",
+  "version": "5.5",
   "permissions": [
     "tabs",
     "storage",
     "scripting",
     "clipboardRead"
   ],
+  "host_permissions": [
+    "https://*.supabase.co/*",
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
-  },
-  "externally_connectable": {
-    "matches": [
-      "http://localhost:*/*",
-      "http://127.0.0.1:*/*",
-      "https://*.github.io/*",
-      "https://*.vercel.app/*",
-      "https://*.thirunabimadh.in/*"
-    ]
   },
   "content_scripts": [
     {

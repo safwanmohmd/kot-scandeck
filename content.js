@@ -1359,4 +1359,8 @@
   if (window.KOT_RunsheetModule && typeof window.KOT_RunsheetModule.mount === 'function') {
     window.KOT_RunsheetModule.mount(shadowRoot);
   }
+
+
+
+  
 })();

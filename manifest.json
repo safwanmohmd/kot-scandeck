@@ -1,9 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KOT-ScanDeck",
-  "short_name": "KOT",
-  "version": "3.0",
-  "description": "Logistics scanning deck auto-injector extension with custom exclusion filters, version auto-updates, and custom audio RTO alert.",
+  "version": "5.4",
   "permissions": [
     "tabs",
     "storage",
@@ -13,20 +11,20 @@
   "background": {
     "service_worker": "background.js"
   },
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*",
+      "https://*.github.io/*",
+      "https://*.vercel.app/*",
+      "https://*.thirunabimadh.in/*"
+    ]
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js", "runsheet.js"],
+      "js": ["content.js", "runsheet.js", "auditor.js"],
       "run_at": "document_end"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["alarm.mp3", "cpd_alarm.mp3"],
-      "matches": ["<all_urls>"]
     }
   ]
 }

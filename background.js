@@ -34,7 +34,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   }
 });
 
-// 3. Keep-alive message handler from runsheet.js
+// 3. Keep-alive message handler from runsheet.js & Auditor internal sync
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'LOCK_RUNSHEET_TAB' && sender.tab) {
     isRunsheetActive = true;
@@ -56,5 +56,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: 'alive' });
   }
 
+  // Auditor query: Allows auditor.js to request the latest active TIDs whenever any tab loads
+  if (message.action === 'GET_PERSISTED_AUDITOR_TIDS') {
+    chrome.storage.local.get(['auditor_target_tids', 'auditor_alarm_enabled'], (data) => {
+      sendResponse({
+        tids: data.auditor_target_tids || [],
+        enabled: typeof data.auditor_alarm_enabled !== 'undefined' ? data.auditor_alarm_enabled : true
+      });
+    });
+    return true;
+  }
+
+  return true;
+});
+
+// 4. External Web Page Bridge: Receives TIDs from the React Sender page
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  if (message && message.type === 'SET_AUDITOR_TARGET_TIDS') {
+    const rawList = message.tids || [];
+    const cleanList = Array.from(
+      new Set(
+        (Array.isArray(rawList) ? rawList : String(rawList).split(/[\n,;\s]+/))
+          .map((s) => String(s).trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+
+    // 1. Commit permanently to chrome.storage.local
+    chrome.storage.local.set({ auditor_target_tids: cleanList }, () => {
+      console.log(`[ScanDeck Background] Persisted ${cleanList.length} Auditor TIDs.`);
+    });
+
+    // 2. Broadcast immediately to all open tabs running content.js / auditor.js
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach((tab) => {
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'SYNC_AUDITOR_TIDS',
+          tids: cleanList
+        }).catch(() => {
+          // Tab does not contain content script; safe to ignore
+        });
+      });
+    });
+
+    sendResponse({ status: 'success', count: cleanList.length });
+  }
   return true;
 });

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ERP Mock: Shipment Reconciliation & Inspection</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #0f172a; color: #f8fafc; padding: 24px; margin: 0; }
+    .container { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 18px; }
+    h1 { margin: 0 0 6px 0; font-size: 18px; color: #38bdf8; }
+    p { margin: 0; font-size: 13px; color: #94a3b8; }
+
+    /* Controls */
+    .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; }
+    button.btn {
+      padding: 10px 14px; border: none; border-radius: 6px; font-weight: 700; font-size: 12px;
+      cursor: pointer; transition: all 0.15s ease; display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    button.btn:active { transform: scale(0.98); }
+    .btn-rto { background: #dc2626; color: white; }
+    .btn-rto:hover { background: #b91c1c; }
+    .btn-cpd { background: #059669; color: white; }
+    .btn-cpd:hover { background: #047857; }
+    .btn-normal { background: #2563eb; color: white; }
+    .btn-normal:hover { background: #1d4ed8; }
+    .btn-random { background: #7c3aed; color: white; }
+    .btn-random:hover { background: #6d28d9; }
+    .btn-clear { background: #475569; color: white; }
+    .btn-clear:hover { background: #334155; }
+
+    /* Scanner Field */
+    .scan-area { display: flex; gap: 10px; margin-top: 12px; }
+    .scan-input {
+      flex: 1; padding: 10px 12px; background: #0f172a; border: 1px solid #475569; border-radius: 6px;
+      color: #fff; font-family: monospace; font-size: 14px; outline: none;
+    }
+    .scan-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+
+    /* ERP Table Styled Component Mocks */
+    .table-container { overflow-x: auto; margin-top: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { background: #0f172a; color: #94a3b8; text-align: left; padding: 10px; border-bottom: 1px solid #334155; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+    td { padding: 12px 10px; border-bottom: 1px solid #334155; vertical-align: middle; }
+    tr:hover { background: #243247; }
+
+    /* Realistic ERP Styled Components matching inspection logic */
+    .sc-AykKC { font-weight: 700; }
+    .fmcvyS { display: flex; flex-direction: column; gap: 2px; }
+    .badge-rto-yes { color: #ef4444; font-weight: 800; background: rgba(239, 68, 68, 0.15); padding: 2px 6px; border-radius: 4px; display: inline-block; width: fit-content; }
+    .badge-rto-no { color: #94a3b8; font-weight: 600; }
+    .badge-cpd-today { color: #10b981; font-weight: 800; background: rgba(16, 185, 129, 0.15); padding: 2px 6px; border-radius: 4px; display: inline-block; width: fit-content; }
+    .badge-cpd-future { color: #cbd5e1; }
+
+    /* Log status */
+    .log-strip { margin-top: 10px; font-size: 11px; font-family: monospace; color: #94a3b8; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Header -->
+  <div class="card">
+    <h1>📦 ERP Reconciliation & Inspection Simulation Deck</h1>
+    <p>Use this page to test the <strong>Live Scan Alarm Watcher</strong> or <strong>Scanner Injector</strong>. Open <code>F12</code> console, paste your script, and trigger test rows below.</p>
+    
+    <!-- Direct Barcode Input -->
+    <div class="scan-area">
+      <input type="text" id="enteredShipmentId" class="scan-input" placeholder="Click here and scan barcode or let script inject..." autofocus />
+      <button class="btn btn-normal" id="scan-manual-btn">⏎ Enter Scan</button>
+    </div>
+
+    <!-- Quick Alarm Triggers -->
+    <div class="controls-grid">
+      <button class="btn btn-rto" id="btn-trigger-rto">🚨 Mock RTO (YES)</button>
+      <button class="btn btn-cpd" id="btn-trigger-cpd">📅 Mock Today's CPD</button>
+      <button class="btn btn-normal" id="btn-trigger-normal">✅ Mock Normal Package</button>
+      <button class="btn btn-random" id="btn-trigger-random">🎲 Mock Random 10 Items</button>
+      <button class="btn btn-clear" id="btn-clear-table">🗑️ Clear Table</button>
+    </div>
+
+    <div class="log-strip">
+      <span id="status-line">Status: Ready. Awaiting scan...</span>
+      <span id="row-counter">Total Scanned: 0</span>
+    </div>
+  </div>
+
+  <!-- Replicated ERP Reconciliation Table -->
+  <div class="card">
+    <div class="table-container">
+      <table id="shipment-table">
+        <thead>
+          <tr>
+            <th>Tracking ID</th>
+            <th>Type</th>
+            <th>IS RTO Label & Status</th>
+            <th>CPD Scheduled</th>
+            <th>Destination Hub</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <!-- Dynamic rows append here -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Helper to format YYYY-MM-DD
+  function getTodayStr(offsetDays = 0) {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const tableBody = document.getElementById('table-body');
+  const statusLine = document.getElementById('status-line');
+  const rowCounter = document.getElementById('row-counter');
+  const scanInput = document.getElementById('enteredShipmentId');
+
+  let count = 0;
+
+  // Insert a mock row with exact ERP DOM structures matching content.js detection
+  function addMockRow(tid, isRto, cpdDate, type = "Standard Forward") {
+    count++;
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-shipment-id', tid);
+
+    // Exact Styled-Component structure: class="fmcvyS" with label class="sc-AykKC"
+    const rtoHtml = isRto
+      ? `<div class="fmcvyS"><span class="sc-AykKC">IS RTO:</span><span class="badge-rto-yes">YES</span></div>`
+      : `<div class="fmcvyS"><span class="sc-AykKC">IS RTO:</span><span class="badge-rto-no">NO</span></div>`;
+
+    const isToday = cpdDate === getTodayStr(0);
+    const cpdHtml = `<div class="fmcvyS"><span class="sc-AykKC">CPD:</span><span class="${isToday ? 'badge-cpd-today' : 'badge-cpd-future'}">${cpdDate}</span></div>`;
+
+    tr.innerHTML = `
+      <td><strong>${tid}</strong></td>
+      <td>${type}</td>
+      <td>${rtoHtml}</td>
+      <td>${cpdHtml}</td>
+      <td>KOT_MALAPPURAM (KOT/MPM)</td>
+      <td><button class="btn btn-clear" style="padding: 4px 8px; font-size: 11px;" onclick="this.closest('tr').remove();">Dismiss</button></td>
+    `;
+
+    // Prepend to top of table to simulate incoming reconciliation scan
+    tableBody.insertBefore(tr, tableBody.firstChild);
+
+    statusLine.textContent = `Scanned ${tid} | RTO: ${isRto ? 'YES 🚨' : 'NO'} | CPD: ${cpdDate}`;
+    rowCounter.textContent = `Total Scanned: ${count}`;
+  }
+
+  // Generate random Tracking ID
+  function generateTid() {
+    return 'FMPR' + Math.floor(100000000 + Math.random() * 900000000);
+  }
+
+  // 1. Mock RTO
+  document.getElementById('btn-trigger-rto').addEventListener('click', () => {
+    addMockRow(generateTid(), true, getTodayStr(2), "Undelivered Return");
+  });
+
+  // 2. Mock CPD Today
+  document.getElementById('btn-trigger-cpd').addEventListener('click', () => {
+    addMockRow(generateTid(), false, getTodayStr(0), "Critical Delivery");
+  });
+
+  // 3. Mock Normal
+  document.getElementById('btn-trigger-normal').addEventListener('click', () => {
+    addMockRow(generateTid(), false, getTodayStr(3), "Regular Forward");
+  });
+
+  // 4. Mock Random Batch
+  document.getElementById('btn-trigger-random').addEventListener('click', () => {
+    for (let i = 0; i < 10; i++) {
+      const isRto = Math.random() < 0.25; // 25% chance of RTO
+      const isCpd = Math.random() < 0.35; // 35% chance of today's CPD
+      const date = isCpd ? getTodayStr(0) : getTodayStr(Math.floor(Math.random() * 5) + 1);
+      setTimeout(() => {
+        addMockRow(generateTid(), isRto, date);
+      }, i * 300);
+    }
+  });
+
+  // 5. Clear Table
+  document.getElementById('btn-clear-table').addEventListener('click', () => {
+    tableBody.innerHTML = '';
+    count = 0;
+    rowCounter.textContent = 'Total Scanned: 0';
+    statusLine.textContent = 'Status: Cleared';
+  });
+
+  // Manual Scan Input Handler
+  function handleManualInput() {
+    const val = scanInput.value.trim().toUpperCase();
+    if (!val) return;
+
+    // Simulate outcome based on prefix or random
+    const isRto = val.includes('RTO') || Math.random() < 0.3;
+    const isToday = val.includes('CPD') || Math.random() < 0.3;
+    const cpd = isToday ? getTodayStr(0) : getTodayStr(2);
+
+    addMockRow(val, isRto, cpd);
+    scanInput.value = '';
+    scanInput.focus();
+  }
+
+  document.getElementById('scan-manual-btn').addEventListener('click', handleManualInput);
+  scanInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleManualInput();
+  });
+</script>
+
+</body>
+</html>

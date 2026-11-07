@@ -1288,6 +1288,9 @@
         return;
       }
 
+      // Flag automated scanning active so manual scan loggers ignore these programmatic injections
+      window._kotIsAutomatedScanningActive = true;
+
       isRunning = true;
       isPaused = false;
       shouldStop = false;
@@ -1297,34 +1300,39 @@
       pauseBtn.disabled = false;
       stopBtn.disabled = false;
 
-      for (currentIndex = 0; currentIndex < trackingQueue.length; currentIndex++) {
-        if (shouldStop) break;
-
-        while (isPaused) {
-          statusLabel.textContent = "Status: Paused";
-          await new Promise(res => setTimeout(res, 200));
+      try {
+        for (currentIndex = 0; currentIndex < trackingQueue.length; currentIndex++) {
           if (shouldStop) break;
-        }
-        if (shouldStop) break;
 
-        const tid = trackingQueue[currentIndex];
-        statusLabel.textContent = `Injecting: ${tid}`;
-        counterLabel.textContent = `${currentIndex + 1}/${trackingQueue.length}`;
-        progressFill.style.width = `${((currentIndex + 1) / trackingQueue.length) * 100}%`;
+          while (isPaused) {
+            statusLabel.textContent = "Status: Paused";
+            await new Promise(res => setTimeout(res, 200));
+            if (shouldStop) break;
+          }
+          if (shouldStop) break;
 
-        activeEl.focus();
-        
-        // Escape clear only in PRC Automation mode
-        if (enablePrcAutomation) {
-          activeEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-          await new Promise(res => setTimeout(res, 30));
-        }
+          const tid = trackingQueue[currentIndex];
+          statusLabel.textContent = `Injecting: ${tid}`;
+          counterLabel.textContent = `${currentIndex + 1}/${trackingQueue.length}`;
+          progressFill.style.width = `${((currentIndex + 1) / trackingQueue.length) * 100}%`;
 
-        await simulateHardwareScan(activeEl, tid);
-        
-        if (scanDelay > 0) {
-          await new Promise(res => setTimeout(res, scanDelay));
+          activeEl.focus();
+          
+          // Escape clear only in PRC Automation mode
+          if (enablePrcAutomation) {
+            activeEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+            await new Promise(res => setTimeout(res, 30));
+          }
+
+          await simulateHardwareScan(activeEl, tid);
+          
+          if (scanDelay > 0) {
+            await new Promise(res => setTimeout(res, scanDelay));
+          }
         }
+      } finally {
+        // Always reset flag when loop finishes or halts
+        window._kotIsAutomatedScanningActive = false;
       }
 
       isRunning = false;
@@ -1354,13 +1362,15 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 8. Connect External Auto-Runsheet Engine Module (runsheet.js)
+  // 8. Connect External Auto-Runsheet Engine Module (runsheet.js) & Auditor
   // ---------------------------------------------------------------------------
   if (window.KOT_RunsheetModule && typeof window.KOT_RunsheetModule.mount === 'function') {
     window.KOT_RunsheetModule.mount(shadowRoot);
   }
 
+  // Dispatch panel ready event so auditor.js attaches reliably
+  window.dispatchEvent(new CustomEvent('SCANDECK_PANEL_READY', {
+    detail: { shadowRoot }
+  }));
 
-
-  
 })();

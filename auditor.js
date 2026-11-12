@@ -1,5 +1,6 @@
 // =============================================================================
-// KOT-ScanDeck: Universal Manual Scan Monitor & Missing Shipment Auditor
+// KOT-ScanDeck: PRC-Only Manual Scan Monitor & Missing Shipment Auditor
+// Features: Active Panel Guard + PRC DOM Detection + RTO Status Capture
 // =============================================================================
 
 window.KOT_AuditorModule = (function () {
@@ -11,36 +12,14 @@ window.KOT_AuditorModule = (function () {
 
   let auditorTargetSet = new Set();
   let auditorFoundSet = new Set();
-  let enableAuditorAlarm = true;
-  let lastAuditorAlertTime = 0;
+  let globalRemoteAlarmActive = true;
+  let localAlarmEnabled = true;
   let currentShadowRoot = null;
   let syncTimer = null;
 
-  // 1. Fetch Global Missing TIDs from Cloud
-  async function fetchGlobalTids() {
-    if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.includes('YOUR_PROJECT_ID')) return;
-    try {
-      const res = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_targets?select=tracking_id`, {
-        headers: {
-          'apikey': SUPABASE_CONFIG.anonKey,
-          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        auditorTargetSet = new Set(data.map(item => item.tracking_id.trim().toUpperCase()));
-        updateAuditorUi();
-      }
-    } catch (e) {
-      console.warn('[Auditor] Cloud poll error:', e);
-    }
-  }
-
-  fetchGlobalTids();
-  if (syncTimer) clearInterval(syncTimer);
-  syncTimer = setInterval(fetchGlobalTids, SUPABASE_CONFIG.pollIntervalMs);
-
-  // Helper: Check if Extension Panel is Open/Active
+  // ---------------------------------------------------------------------------
+  // GUARD 1: Check if the ScanDeck Extension Menu Panel is Open & Visible
+  // ---------------------------------------------------------------------------
   function isExtensionPanelVisible() {
     if (!currentShadowRoot) {
       const root = document.getElementById('barcode-injector-root');
@@ -51,17 +30,112 @@ window.KOT_AuditorModule = (function () {
     return !!(panel && !panel.classList.contains('panel-hidden'));
   }
 
-  // 2. High 3-Beep Piercing Alarm (Only sounds if menu is active)
-  function playAuditorPiercingAlarm() {
-    if (!isExtensionPanelVisible()) {
-      console.log('[Auditor] Missing item scanned, but alarm muted because panel is closed.');
-      return;
+  // ---------------------------------------------------------------------------
+  // GUARD 2: Exact DOM Detection Method from content.js (IS RTO / CPD Elements)
+  // ---------------------------------------------------------------------------
+  function isPrcReconciliationDomActive() {
+    const elements = Array.from(document.querySelectorAll('.sc-AykKC, .fmcvyS, div, td, tr, span'));
+
+    const hasRtoNode = elements.some((el) => {
+      const text = el.textContent ? el.textContent.trim().toUpperCase() : '';
+      return text === 'IS RTO' || text === 'IS RTO:';
+    });
+
+    const hasCpdNode = elements.some((el) => {
+      const text = el.textContent ? el.textContent.trim().toUpperCase() : '';
+      return text === 'CPD' || text === 'CPD:';
+    });
+
+    if (hasRtoNode || hasCpdNode) return true;
+
+    const bodyText = (document.body.textContent || document.body.innerText || '')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+
+    return bodyText.includes('IS RTO YES') || bodyText.includes('IS RTO NO') || bodyText.includes('IS RTO:');
+  }
+
+  // ---------------------------------------------------------------------------
+  // HELPER: Detect if Scanned Shipment is RTO (Exact content.js Logic)
+  // ---------------------------------------------------------------------------
+  function detectIsRtoOnScreen() {
+    const elements = Array.from(document.querySelectorAll('.sc-AykKC, .fmcvyS, div, td, tr, span'));
+
+    const rtoLabelNode = elements.find((el) => {
+      const text = el.textContent ? el.textContent.trim().toUpperCase() : '';
+      return text === 'IS RTO' || text === 'IS RTO:';
+    });
+
+    if (rtoLabelNode) {
+      const parentCell = rtoLabelNode.closest('.fmcvyS, div, td') || rtoLabelNode.parentElement;
+      const containerText = parentCell ? parentCell.textContent.toUpperCase() : '';
+      if (containerText.includes('YES') && !containerText.includes('IS RTO CV')) {
+        return true;
+      }
+    } else {
+      const bodyText = (document.body.textContent || document.body.innerText || '')
+        .replace(/\s+/g, ' ')
+        .toUpperCase();
+      if (bodyText.includes('IS RTO YES')) {
+        return true;
+      }
     }
+
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 1. Fetch Cloud Missing Targets & Remote Alarm Switch
+  // ---------------------------------------------------------------------------
+  async function fetchCloudData() {
+    if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.includes('YOUR_PROJECT_ID')) return;
+    try {
+      const resTargets = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_targets?select=tracking_id`, {
+        headers: {
+          'apikey': SUPABASE_CONFIG.anonKey,
+          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`
+        }
+      });
+      if (resTargets.ok) {
+        const data = await resTargets.json();
+        auditorTargetSet = new Set(data.map((item) => item.tracking_id.trim().toUpperCase()));
+      }
+
+      const resConfig = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_config?key=eq.global_alarm_enabled&select=value`, {
+        headers: {
+          'apikey': SUPABASE_CONFIG.anonKey,
+          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`
+        }
+      });
+      if (resConfig.ok) {
+        const configData = await resConfig.json();
+        if (configData.length > 0) {
+          globalRemoteAlarmActive = configData[0].value === 'true';
+        }
+      }
+
+      updateAuditorUi();
+    } catch (e) {
+      console.warn('[Auditor] Cloud poll error:', e);
+    }
+  }
+
+  fetchCloudData();
+  if (syncTimer) clearInterval(syncTimer);
+  syncTimer = setInterval(fetchCloudData, SUPABASE_CONFIG.pollIntervalMs);
+
+  // ---------------------------------------------------------------------------
+  // 2. High 3-Beep Piercing Alarm (Requires Menu Active + PRC DOM + Cloud ON)
+  // ---------------------------------------------------------------------------
+  function playAuditorPiercingAlarm() {
+    if (!globalRemoteAlarmActive) return;
+    if (!isExtensionPanelVisible()) return;
+    if (!isPrcReconciliationDomActive()) return;
 
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      [0, 0.16, 0.32].forEach(startOffset => {
-        [2400, 1600].forEach(freq => {
+      [0, 0.16, 0.32].forEach((startOffset) => {
+        [2400, 1600].forEach((freq) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = 'square';
@@ -76,16 +150,17 @@ window.KOT_AuditorModule = (function () {
           osc.stop(t + 0.12);
         });
       });
-    } catch (e) {
-      console.warn('[Auditor] Audio alert failed:', e);
-    }
+    } catch (e) {}
   }
 
-  // 3. Cloud Logging Engine (Every Manual Scan Recorded)
-  async function logManualScanToCloud(tid, isMissing) {
+  // ---------------------------------------------------------------------------
+  // 3. Log Scanned PRC Shipments & RTO Status to Supabase
+  // ---------------------------------------------------------------------------
+  async function logManualScanToCloud(tid, isMissing, isRto) {
+    if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
+
     const timestamp = new Date().toISOString();
 
-    // Log EVERY manual scan directly to manual_scans table
     fetch(`${SUPABASE_CONFIG.url}/rest/v1/manual_scans`, {
       method: 'POST',
       headers: {
@@ -98,11 +173,11 @@ window.KOT_AuditorModule = (function () {
         tracking_id: tid,
         scanned_at: timestamp,
         is_missing_match: isMissing,
-        device_info: navigator.userAgent.slice(0, 50)
+        is_rto: isRto,
+        device_info: 'PRC Terminal (' + (window.location.hostname || 'Hub') + ')'
       })
-    }).catch(err => console.warn('[Auditor] Scan log failed:', err));
+    }).catch(() => {});
 
-    // If parcel is a target missing item, record in auditor_found_logs
     if (isMissing) {
       fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_found_logs`, {
         method: 'POST',
@@ -114,39 +189,51 @@ window.KOT_AuditorModule = (function () {
         body: JSON.stringify({
           tracking_id: tid,
           found_at: timestamp,
-          notes: 'Scanned manually on ERP terminal'
+          notes: isRto ? 'Scanned manually on PRC page (RTO: YES)' : 'Scanned manually on PRC page'
         })
-      }).catch(err => console.warn('[Auditor] Found log failed:', err));
+      }).catch(() => {});
     }
   }
 
-  // 4. Capture All Manual Scanner Entries (Hardware Enter Event)
+  // ---------------------------------------------------------------------------
+  // 4. Hardware Scanner Interceptor (Active Menu + PRC DOM Only)
+  // ---------------------------------------------------------------------------
   function setupManualScanInterceptor() {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const activeEl = document.activeElement;
-        if (activeEl && (activeEl.id === 'enteredShipmentId' || activeEl.getAttribute('data-testid') === 'enterShipment' || activeEl.tagName === 'INPUT')) {
-          
-          // Skip automated loop injections from Scanner tab
-          if (window._kotIsAutomatedScanningActive) {
-            return;
-          }
+      if (e.key !== 'Enter') return;
 
-          const scannedTid = (activeEl.value || '').trim().toUpperCase();
-          if (scannedTid.length >= 6) {
+      // Guard 1: Menu must be visible/open
+      if (!isExtensionPanelVisible()) return;
+
+      // Guard 2: Ignore automated bulk scanner injections
+      if (window._kotIsAutomatedScanningActive) return;
+
+      const activeEl = document.activeElement;
+      if (
+        activeEl &&
+        (activeEl.id === 'enteredShipmentId' ||
+          activeEl.getAttribute('data-testid') === 'enterShipment' ||
+          activeEl.tagName === 'INPUT')
+      ) {
+        const scannedTid = (activeEl.value || '').trim().toUpperCase();
+        if (scannedTid.length >= 6) {
+          // Wait 300ms for ERP DOM to render IS RTO / CPD details for the scanned shipment
+          setTimeout(() => {
+            if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
+
             const isMissing = auditorTargetSet.has(scannedTid);
+            const isRto = detectIsRtoOnScreen();
 
-            // Log EVERY manual scan to cloud
-            logManualScanToCloud(scannedTid, isMissing);
+            logManualScanToCloud(scannedTid, isMissing, isRto);
 
             if (isMissing) {
               auditorFoundSet.add(scannedTid);
-              if (enableAuditorAlarm) {
+              if (localAlarmEnabled) {
                 playAuditorPiercingAlarm();
               }
               updateAuditorUi();
             }
-          }
+          }, 300);
         }
       }
     }, true);
@@ -154,18 +241,23 @@ window.KOT_AuditorModule = (function () {
 
   setupManualScanInterceptor();
 
-  // 5. DOM Mutation Observer Fallback (For visually loaded table rows)
+  // ---------------------------------------------------------------------------
+  // 5. DOM Mutation Observer (Active Menu + PRC DOM Only)
+  // ---------------------------------------------------------------------------
   function inspectPageForAuditedTids() {
-    if (!enableAuditorAlarm || auditorTargetSet.size === 0) return;
+    if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
+    if (auditorTargetSet.size === 0) return;
+
     const pageText = (document.body.innerText || document.body.textContent || '').toUpperCase();
 
     for (const tid of auditorTargetSet) {
       if (pageText.includes(tid) && !auditorFoundSet.has(tid)) {
         auditorFoundSet.add(tid);
-        if (enableAuditorAlarm) {
+        const isRto = detectIsRtoOnScreen();
+        if (localAlarmEnabled) {
           playAuditorPiercingAlarm();
         }
-        logManualScanToCloud(tid, true);
+        logManualScanToCloud(tid, true, isRto);
         updateAuditorUi();
       }
     }
@@ -174,7 +266,9 @@ window.KOT_AuditorModule = (function () {
   const observer = new MutationObserver(() => inspectPageForAuditedTids());
   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
+  // ---------------------------------------------------------------------------
   // 6. Mount into ScanDeck UI Tab
+  // ---------------------------------------------------------------------------
   function mount(shadowRoot) {
     if (!shadowRoot || shadowRoot.getElementById('tab-btn-auditor')) return;
     currentShadowRoot = shadowRoot;
@@ -195,20 +289,25 @@ window.KOT_AuditorModule = (function () {
     auditorContent.innerHTML = `
       <div style="background:#ecfeff; border:1px solid #a5f3fc; border-radius:6px; padding:6px; display:flex; flex-direction:column; gap:4px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 Missing Shipment Auditor</span>
-          <label style="cursor:pointer; display:flex; align-items:center; gap:3px; font-size:7.5px; font-weight:700; color:#0e7490;">
-            <input type="checkbox" id="auditor-alarm-chk" ${enableAuditorAlarm ? 'checked' : ''} /> ALARM
-          </label>
+          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 PRC Shipment Auditor</span>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <span id="remote-alarm-indicator" style="font-size:7px; font-weight:800; padding:1px 3px; border-radius:3px; background:${globalRemoteAlarmActive ? '#dcfce7' : '#fee2e2'}; color:${globalRemoteAlarmActive ? '#15803d' : '#b91c1c'};">
+              CLOUD: ${globalRemoteAlarmActive ? 'ON' : 'OFF'}
+            </span>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:2px; font-size:7.5px; font-weight:700; color:#0e7490;">
+              <input type="checkbox" id="auditor-alarm-chk" ${localAlarmEnabled ? 'checked' : ''} /> ALARM
+            </label>
+          </div>
         </div>
-        <p style="font-size:7.5px; color:#155e75; margin:0;">Alarm triggers only when panel is visible. All manual scans sync to cloud.</p>
+        <p style="font-size:7.5px; color:#155e75; margin:0;">Captures PRC scans & RTO status when menu is open.</p>
       </div>
 
       <div>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-          <label style="font-size:8px; font-weight:700; color:#64748b;">Target Missing TIDs (Cloud)</label>
+          <label style="font-size:8px; font-weight:700; color:#64748b;">Missing Target Queue</label>
           <span id="auditor-counter" style="font-size:8px; font-weight:700; color:#0891b2;">${auditorFoundSet.size}/${auditorTargetSet.size} Detected</span>
         </div>
-        <textarea id="auditor-input" readonly style="height:45px; font-size:9px; width:100%; border:1px solid #cbd5e1; border-radius:5px; padding:4px; font-family:monospace; background:#f8fafc;">${Array.from(auditorTargetSet).join('\n')}</textarea>
+        <textarea id="auditor-input" readonly style="height:42px; font-size:9px; width:100%; border:1px solid #cbd5e1; border-radius:5px; padding:4px; font-family:monospace; background:#f8fafc;">${Array.from(auditorTargetSet).join('\n')}</textarea>
       </div>
 
       <div style="display:flex; gap:4px;">
@@ -217,7 +316,7 @@ window.KOT_AuditorModule = (function () {
       </div>
 
       <div style="display:flex; flex-direction:column; gap:2px;">
-        <label style="font-size:7.5px; font-weight:700; color:#059669;">Found Missing Shipments (Logged to Cloud):</label>
+        <label style="font-size:7.5px; font-weight:700; color:#059669;">Found Shipments (PRC Synced):</label>
         <div id="auditor-found-list" style="max-height:55px; overflow-y:auto; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:4px; padding:4px; font-size:8px; font-family:monospace; color:#15803d;">
           ${renderFoundList()}
         </div>
@@ -225,12 +324,11 @@ window.KOT_AuditorModule = (function () {
     `;
     panelBody.appendChild(auditorContent);
 
-    // Tab Navigation
     function switchToTab(targetBtn, targetContent) {
       const allButtons = shadowRoot.querySelectorAll('.tab-btn');
       const allContents = shadowRoot.querySelectorAll('.tab-content');
-      allButtons.forEach(btn => btn.classList.remove('active', 'rs-active'));
-      allContents.forEach(content => content.classList.add('hidden-tab'));
+      allButtons.forEach((btn) => btn.classList.remove('active', 'rs-active'));
+      allContents.forEach((content) => content.classList.add('hidden-tab'));
       targetBtn.classList.add('active');
       targetContent.classList.remove('hidden-tab');
     }
@@ -256,11 +354,11 @@ window.KOT_AuditorModule = (function () {
     const testBtn = shadowRoot.getElementById('auditor-test-sound');
     const refreshBtn = shadowRoot.getElementById('auditor-refresh-btn');
 
-    chk.addEventListener('change', () => { enableAuditorAlarm = chk.checked; });
+    chk.addEventListener('change', () => { localAlarmEnabled = chk.checked; });
     testBtn.addEventListener('click', () => playAuditorPiercingAlarm());
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.textContent = '⏳ Syncing...';
-      await fetchGlobalTids();
+      await fetchCloudData();
       refreshBtn.textContent = '✅ Synced!';
       setTimeout(() => { refreshBtn.textContent = '🔄 Force Sync'; }, 1500);
     });
@@ -269,8 +367,8 @@ window.KOT_AuditorModule = (function () {
   }
 
   function renderFoundList() {
-    if (auditorFoundSet.size === 0) return '<span style="color:#94a3b8;">No missing scans detected yet</span>';
-    return Array.from(auditorFoundSet).map(id => `✅ Found: ${id}`).join('<br>');
+    if (auditorFoundSet.size === 0) return '<span style="color:#94a3b8;">No missing scans recorded</span>';
+    return Array.from(auditorFoundSet).map((id) => `✅ Found: ${id}`).join('<br>');
   }
 
   function updateAuditorUi() {
@@ -283,10 +381,16 @@ window.KOT_AuditorModule = (function () {
     const counter = currentShadowRoot.getElementById('auditor-counter');
     const input = currentShadowRoot.getElementById('auditor-input');
     const foundList = currentShadowRoot.getElementById('auditor-found-list');
+    const remoteIndicator = currentShadowRoot.getElementById('remote-alarm-indicator');
 
     if (counter) counter.textContent = `${auditorFoundSet.size}/${auditorTargetSet.size} Detected`;
     if (input && document.activeElement !== input) input.value = Array.from(auditorTargetSet).join('\n');
     if (foundList) foundList.innerHTML = renderFoundList();
+    if (remoteIndicator) {
+      remoteIndicator.style.background = globalRemoteAlarmActive ? '#dcfce7' : '#fee2e2';
+      remoteIndicator.style.color = globalRemoteAlarmActive ? '#15803d' : '#b91c1c';
+      remoteIndicator.textContent = `CLOUD: ${globalRemoteAlarmActive ? 'ON' : 'OFF'}`;
+    }
   }
 
   const root = document.getElementById('barcode-injector-root');
@@ -296,5 +400,5 @@ window.KOT_AuditorModule = (function () {
     if (e.detail && e.detail.shadowRoot) mount(e.detail.shadowRoot);
   });
 
-  return { mount, fetchGlobalTids };
+  return { mount, fetchCloudData };
 })();

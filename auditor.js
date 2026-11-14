@@ -1,13 +1,14 @@
 // =============================================================================
-// KOT-ScanDeck: PRC-Only Manual Scan Monitor & Missing Shipment Auditor
-// Features: Active Panel Guard + PRC DOM Detection + RTO Status Capture
+// KOT-ScanDeck: PRC Reconciliation (/shipments/pendingreco) Manual Scan Auditor
+// Active whenever the main ScanDeck popup panel is open (Any Tab Selected)
 // =============================================================================
 
 window.KOT_AuditorModule = (function () {
   const SUPABASE_CONFIG = {
-    url: 'https://pjlkrgqzghndndasdxik.supabase.co', // Your project URL
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqbGtyZ3F6Z2huZG5kYXNkeGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3MTk5MzcsImV4cCI6MjA5ODI5NTkzN30.V0CDT9JQwXtVeMOxrbvD5TD4nEX30F_cM-EX6WqIzAI', // Your VITE_SUPABASE_ANON_KEY
-    pollIntervalMs: 8000
+    url: 'https://pjlkrgqzghndndasdxik.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqbGtyZ3F6Z2huZG5kYXNkeGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3MTk5MzcsImV4cCI6MjA5ODI5NTkzN30.V0CDT9JQwXtVeMOxrbvD5TD4nEX30F_cM-EX6WqIzAI',
+    pollIntervalMs: 8000,
+    targetPath: '/shipments/pendingreco'
   };
 
   let auditorTargetSet = new Set();
@@ -18,7 +19,7 @@ window.KOT_AuditorModule = (function () {
   let syncTimer = null;
 
   // ---------------------------------------------------------------------------
-  // GUARD 1: Check if the ScanDeck Extension Menu Panel is Open & Visible
+  // GUARD 1: Check if the Main ScanDeck Extension Popup Menu is Open (Any Tab)
   // ---------------------------------------------------------------------------
   function isExtensionPanelVisible() {
     if (!currentShadowRoot) {
@@ -31,9 +32,14 @@ window.KOT_AuditorModule = (function () {
   }
 
   // ---------------------------------------------------------------------------
-  // GUARD 2: Exact DOM Detection Method from content.js (IS RTO / CPD Elements)
+  // GUARD 2: Strict URL Binding (/shipments/pendingreco) + PRC DOM Verification
   // ---------------------------------------------------------------------------
-  function isPrcReconciliationDomActive() {
+  function isPrcPendingRecoActive() {
+    const currentUrl = window.location.href.toLowerCase();
+    if (!currentUrl.includes(SUPABASE_CONFIG.targetPath)) {
+      return false;
+    }
+
     const elements = Array.from(document.querySelectorAll('.sc-AykKC, .fmcvyS, div, td, tr, span'));
 
     const hasRtoNode = elements.some((el) => {
@@ -88,7 +94,6 @@ window.KOT_AuditorModule = (function () {
   // 1. Fetch Cloud Missing Targets & Remote Alarm Switch
   // ---------------------------------------------------------------------------
   async function fetchCloudData() {
-    if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.includes('YOUR_PROJECT_ID')) return;
     try {
       const resTargets = await fetch(`${SUPABASE_CONFIG.url}/rest/v1/auditor_targets?select=tracking_id`, {
         headers: {
@@ -125,12 +130,12 @@ window.KOT_AuditorModule = (function () {
   syncTimer = setInterval(fetchCloudData, SUPABASE_CONFIG.pollIntervalMs);
 
   // ---------------------------------------------------------------------------
-  // 2. High 3-Beep Piercing Alarm (Requires Menu Active + PRC DOM + Cloud ON)
+  // 2. High 3-Beep Piercing Alarm (Menu Open + /shipments/pendingreco + Cloud ON)
   // ---------------------------------------------------------------------------
   function playAuditorPiercingAlarm() {
     if (!globalRemoteAlarmActive) return;
     if (!isExtensionPanelVisible()) return;
-    if (!isPrcReconciliationDomActive()) return;
+    if (!window.location.href.toLowerCase().includes(SUPABASE_CONFIG.targetPath)) return;
 
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -154,12 +159,11 @@ window.KOT_AuditorModule = (function () {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. Log Scanned PRC Shipments & RTO Status to Supabase
+  // 3. Log Scanned Shipment Details (TID, Is RTO, Scan Time) to Supabase
   // ---------------------------------------------------------------------------
-  async function logManualScanToCloud(tid, isMissing, isRto) {
-    if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
-
-    const timestamp = new Date().toISOString();
+  async function logManualScanToCloud(tid, isMissing, isRto, scanTimestamp) {
+    if (!isExtensionPanelVisible()) return;
+    if (!window.location.href.toLowerCase().includes(SUPABASE_CONFIG.targetPath)) return;
 
     fetch(`${SUPABASE_CONFIG.url}/rest/v1/manual_scans`, {
       method: 'POST',
@@ -171,10 +175,10 @@ window.KOT_AuditorModule = (function () {
       },
       body: JSON.stringify({
         tracking_id: tid,
-        scanned_at: timestamp,
+        scanned_at: scanTimestamp,
         is_missing_match: isMissing,
         is_rto: isRto,
-        device_info: 'PRC Terminal (' + (window.location.hostname || 'Hub') + ')'
+        device_info: 'PendingReco (' + (window.location.hostname || 'Hub') + ')'
       })
     }).catch(() => {});
 
@@ -188,24 +192,27 @@ window.KOT_AuditorModule = (function () {
         },
         body: JSON.stringify({
           tracking_id: tid,
-          found_at: timestamp,
-          notes: isRto ? 'Scanned manually on PRC page (RTO: YES)' : 'Scanned manually on PRC page'
+          found_at: scanTimestamp,
+          notes: isRto ? 'Scanned on /shipments/pendingreco (RTO: YES)' : 'Scanned on /shipments/pendingreco (RTO: NO)'
         })
       }).catch(() => {});
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Hardware Scanner Interceptor (Active Menu + PRC DOM Only)
+  // 4. Hardware Scanner Interceptor (Bound to /shipments/pendingreco + Open Menu)
   // ---------------------------------------------------------------------------
   function setupManualScanInterceptor() {
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
 
-      // Guard 1: Menu must be visible/open
+      // Guard 1: Main popup panel must be visible/open (regardless of active tab)
       if (!isExtensionPanelVisible()) return;
 
-      // Guard 2: Ignore automated bulk scanner injections
+      // Guard 2: URL must be /shipments/pendingreco
+      if (!window.location.href.toLowerCase().includes(SUPABASE_CONFIG.targetPath)) return;
+
+      // Guard 3: Ignore automated bulk scanner injections
       if (window._kotIsAutomatedScanningActive) return;
 
       const activeEl = document.activeElement;
@@ -217,14 +224,17 @@ window.KOT_AuditorModule = (function () {
       ) {
         const scannedTid = (activeEl.value || '').trim().toUpperCase();
         if (scannedTid.length >= 6) {
-          // Wait 300ms for ERP DOM to render IS RTO / CPD details for the scanned shipment
+          const exactScanTime = new Date().toISOString();
+
+          // Wait 350ms for ERP DOM to render IS RTO / CPD details for the scanned shipment
           setTimeout(() => {
-            if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
+            if (!isExtensionPanelVisible()) return;
+            if (!isPrcPendingRecoActive()) return;
 
             const isMissing = auditorTargetSet.has(scannedTid);
             const isRto = detectIsRtoOnScreen();
 
-            logManualScanToCloud(scannedTid, isMissing, isRto);
+            logManualScanToCloud(scannedTid, isMissing, isRto, exactScanTime);
 
             if (isMissing) {
               auditorFoundSet.add(scannedTid);
@@ -233,7 +243,7 @@ window.KOT_AuditorModule = (function () {
               }
               updateAuditorUi();
             }
-          }, 300);
+          }, 350);
         }
       }
     }, true);
@@ -242,10 +252,10 @@ window.KOT_AuditorModule = (function () {
   setupManualScanInterceptor();
 
   // ---------------------------------------------------------------------------
-  // 5. DOM Mutation Observer (Active Menu + PRC DOM Only)
+  // 5. DOM Mutation Observer (Open Menu + /shipments/pendingreco Only)
   // ---------------------------------------------------------------------------
   function inspectPageForAuditedTids() {
-    if (!isExtensionPanelVisible() || !isPrcReconciliationDomActive()) return;
+    if (!isExtensionPanelVisible() || !isPrcPendingRecoActive()) return;
     if (auditorTargetSet.size === 0) return;
 
     const pageText = (document.body.innerText || document.body.textContent || '').toUpperCase();
@@ -254,10 +264,11 @@ window.KOT_AuditorModule = (function () {
       if (pageText.includes(tid) && !auditorFoundSet.has(tid)) {
         auditorFoundSet.add(tid);
         const isRto = detectIsRtoOnScreen();
+        const exactScanTime = new Date().toISOString();
         if (localAlarmEnabled) {
           playAuditorPiercingAlarm();
         }
-        logManualScanToCloud(tid, true, isRto);
+        logManualScanToCloud(tid, true, isRto, exactScanTime);
         updateAuditorUi();
       }
     }
@@ -289,7 +300,7 @@ window.KOT_AuditorModule = (function () {
     auditorContent.innerHTML = `
       <div style="background:#ecfeff; border:1px solid #a5f3fc; border-radius:6px; padding:6px; display:flex; flex-direction:column; gap:4px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 PRC Shipment Auditor</span>
+          <span style="font-size:8.5px; font-weight:700; color:#0891b2;">🎯 PendingReco Auditor</span>
           <div style="display:flex; align-items:center; gap:4px;">
             <span id="remote-alarm-indicator" style="font-size:7px; font-weight:800; padding:1px 3px; border-radius:3px; background:${globalRemoteAlarmActive ? '#dcfce7' : '#fee2e2'}; color:${globalRemoteAlarmActive ? '#15803d' : '#b91c1c'};">
               CLOUD: ${globalRemoteAlarmActive ? 'ON' : 'OFF'}
@@ -299,7 +310,7 @@ window.KOT_AuditorModule = (function () {
             </label>
           </div>
         </div>
-        <p style="font-size:7.5px; color:#155e75; margin:0;">Captures PRC scans & RTO status when menu is open.</p>
+        <p style="font-size:7.5px; color:#155e75; margin:0;">Active whenever menu is popped up on <b>/shipments/pendingreco</b> (any tab).</p>
       </div>
 
       <div>
@@ -316,7 +327,7 @@ window.KOT_AuditorModule = (function () {
       </div>
 
       <div style="display:flex; flex-direction:column; gap:2px;">
-        <label style="font-size:7.5px; font-weight:700; color:#059669;">Found Shipments (PRC Synced):</label>
+        <label style="font-size:7.5px; font-weight:700; color:#059669;">Found Shipments (PendingReco Synced):</label>
         <div id="auditor-found-list" style="max-height:55px; overflow-y:auto; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:4px; padding:4px; font-size:8px; font-family:monospace; color:#15803d;">
           ${renderFoundList()}
         </div>
